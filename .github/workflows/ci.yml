@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    name: open62541 ${{ matrix.open62541_ref }} (${{ matrix.encryption }})
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.experimental }}
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Required: minimum supported branch (see OpcUaClient.hpp's
+          # UA_OPEN62541_VER_MAJOR/MINOR #error guard - 1.4 lacks
+          # UA_ClientConfig::allowNonePolicyPassword and is not supported).
+          - open62541_ref: "1.5"
+            encryption: "OFF"
+            experimental: false
+          - open62541_ref: "1.5"
+            encryption: "OPENSSL"
+            experimental: false
+          # Informational only: an early-warning canary for upstream API
+          # breakage. Allowed to fail (continue-on-error above) so it never
+          # blocks a PR/release - open62541's master is not something this
+          # project has any control over.
+          - open62541_ref: "master"
+            encryption: "OFF"
+            experimental: true
+          - open62541_ref: "master"
+            encryption: "OPENSSL"
+            experimental: true
+
+    steps:
+      - name: Checkout OpcUaFesa
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libssl-dev python3-pip
+
+      - name: Resolve open62541 ${{ matrix.open62541_ref }} to a commit SHA
+        id: resolve
+        run: |
+          sha=$(git ls-remote https://github.com/open62541/open62541.git "refs/heads/${{ matrix.open62541_ref }}" | cut -f1)
+          if [ -z "$sha" ]; then
+            echo "Could not resolve branch '${{ matrix.open62541_ref }}' on open62541 - has it been renamed/removed upstream?" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Cache open62541 build
+        id: cache-open62541
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/open62541-install
+          key: open62541-${{ matrix.open62541_ref }}-${{ matrix.encryption }}-${{ steps.resolve.outputs.sha }}
+
+      - name: Build open62541 ${{ matrix.open62541_ref }} (encryption=${{ matrix.encryption }})
+        if: steps.cache-open62541.outputs.cache-hit != 'true'
+        run: |
+          git clone --branch "${{ matrix.open62541_ref }}" --recursive --depth 1 \
+            https://github.com/open62541/open62541.git /tmp/open62541-src
+          cmake -S /tmp/open62541-src -B /tmp/open62541-build \
+            -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/open62541-install" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DUA_ENABLE_AMALGAMATION=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DUA_BUILD_EXAMPLES=OFF \
+            -DUA_ENABLE_ENCRYPTION=${{ matrix.encryption }} \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build /tmp/open62541-build -j"$(nproc)"
+          cmake --install /tmp/open62541-build
+
+      - name: Configure OpcUaFesa
+        run: |
+          cmake -S . -B build \
+            -Dopen62541_DIR="${{ github.workspace }}/open62541-install/lib/cmake/open62541"
+
+      - name: Build OpcUaFesa
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Install Python test dependencies
+        run: pip3 install --user asyncua
+
+      - name: Start mock OPC UA server
+        run: |
+          python3 scripts/mock_server.py > mock_server.log 2>&1 &
+          echo $! > mock_server.pid
+
+          # Wait for both endpoints (plain :4840, secure :4843) to accept
+          # connections before running the tests against them - the server
+          # takes a moment to import the nodeset XML and bind its sockets.
+          for port in 4840 4843; do
+            for _ in $(seq 1 30); do
+              if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
+                exec 3>&- 3<&-
+                break
+              fi
+              sleep 1
+            done
+          done
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Show mock server log on failure
+        if: failure()
+        run: cat mock_server.log || true
+
+      - name: Stop mock OPC UA server
+        if: always()
+        run: kill "$(cat mock_server.pid)" 2>/dev/null || true
