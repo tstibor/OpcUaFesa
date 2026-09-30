@@ -41,9 +41,7 @@
 #error "OpcUaFesa requires open62541 >= 1.5 (UA_ClientConfig::allowNonePolicyPassword is not available before 1.5)"
 #endif
 
-#include <limits.h>
-#include <unistd.h>
-
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -56,7 +54,6 @@
 #include <open62541/plugin/securitypolicy_default.h>
 
 #include <cstring>
-#include <fstream>
 #include <sstream>
 #endif
 
@@ -1736,22 +1733,44 @@ private:
 };
 
 /**
- * @brief File name, next to a deploy unit's own binary, expected to hold
- *        the private key matching whatever client certificate a device
+ * @brief Local, non-shared directory expected to hold OPC UA security
+ *        material for connectOpcUaClient() below: the private key
+ *        (kOpcUaClientKeyFileName) always, and optionally the client/
+ *        trusted-server certificates too, if a device's opcUaClientCert/
+ *        opcUaServerCert field uses the kFileUriPrefix form instead of
+ *        carrying Base64 data inline (see isFileUri()).
+ *
+ * Deliberately a fixed local path rather than derived from the running
+ * binary's own location (e.g. via /proc/self/exe): a FESA deploy unit's
+ * binary is itself reached through yocto-fesa3's release tree, which is
+ * commonly NFS-mounted (often read-only) and readable by everyone with
+ * access to that mount - fine for the certificates (public data) but not
+ * for the private key. kOpcUaSecurityMaterialDir instead names a path on
+ * the target's own local root filesystem, provisioned independently of
+ * yocto-fesa3 release (e.g. scp'd directly onto each target) and outside
+ * any NFS-shared tree. Adjust to match your own provisioning convention if
+ * this path differs on your targets.
+ */
+constexpr const char* kOpcUaSecurityMaterialDir = "/etc/opcua";
+
+/**
+ * @brief File name, under kOpcUaSecurityMaterialDir, expected to hold the
+ *        private key matching whatever client certificate a device
  *        presents via its opcUaClientCert field (see connectOpcUaClient()
  *        below) - SecurityCredentials always needs all three materials
  *        (certificate, private key, trusted server certificate) together,
  *        never just the certificate on its own.
  *
  * Unlike the client/trusted-server certificates (public data, so
- * connectOpcUaClient() expects them as ordinary FESA instance data), the
- * private key is secret and typically shared by every device on a FEC, so
- * it is expected as a plain file next to the running binary instead.
- * yocto-fesa3's `release` operation does not know about this file itself
- * (its own copy list is fixed); a project using connectOpcUaClient() is
- * expected to install it into the release directory via its own
- * post-release hook (yocto-fesa3 runs `<deploy-unit>/post-release.sh`, if
- * present, once per FEC after `release`'s own copy step).
+ * connectOpcUaClient() accepts them either as ordinary FESA instance data
+ * or, via kFileUriPrefix, as a local file reference), the private key is
+ * secret and typically shared by every device on a FEC, so it is always
+ * expected as a plain file under kOpcUaSecurityMaterialDir instead -
+ * never as FESA instance data. yocto-fesa3's `release` operation has no
+ * knowledge of this file or this directory; provisioning it onto each
+ * target is entirely outside yocto-fesa3's release flow (e.g. scp'd
+ * directly onto the target's local disk, independent of the NFS-shared
+ * release tree).
  */
 constexpr const char* kOpcUaClientKeyFileName = "client_key.pem";
 
@@ -1768,24 +1787,60 @@ constexpr const char* kOpcUaClientKeyFileName = "client_key.pem";
 constexpr const char* kOpcUaApplicationUri = "urn:fesa:client";
 
 /**
- * @brief Resolve the directory this running binary itself lives in, via
- *        /proc/self/exe - used by connectOpcUaClient() to locate
- *        kOpcUaClientKeyFileName next to it, independent of the process's
- *        current working directory.
- * @throws std::runtime_error if /proc/self/exe cannot be read.
+ * @brief Prefix marking a FESA instance-data string (opcUaClientCert or
+ *        opcUaServerCert) as a local file reference rather than inline
+ *        Base64-encoded DER data - e.g. "file:/etc/opcua/client_cert.der".
+ *        See isFileUri()/stripFileUriPrefix() and connectOpcUaClient().
  */
-inline std::string getOwnBinaryDirectory()
-{
-    char buffer[PATH_MAX];
-    const ssize_t len = readlink("/proc/self/exe", buffer, sizeof(buffer) - 1);
-    if (len == -1) {
-        throw std::runtime_error("getOwnBinaryDirectory: failed to read /proc/self/exe");
-    }
-    buffer[len] = '\0';
+constexpr const char* kFileUriPrefix = "file:";
 
-    const std::string path(buffer);
-    const std::size_t pos = path.find_last_of('/');
-    return (pos == std::string::npos) ? std::string(".") : path.substr(0, pos);
+/**
+ * @brief True if @p value is a kFileUriPrefix-prefixed local file
+ *        reference rather than inline Base64 data.
+ */
+inline bool isFileUri(const std::string& value)
+{
+    return value.rfind(kFileUriPrefix, 0) == 0;
+}
+
+/**
+ * @brief Strip kFileUriPrefix from @p value, returning the bare file path.
+ * @pre isFileUri(value)
+ */
+inline std::string stripFileUriPrefix(const std::string& value)
+{
+    return value.substr(std::string(kFileUriPrefix).size());
+}
+
+/**
+ * @brief Resolve @p value for a plain-string secret field (currently just
+ *        opcUaPassword): if it's a kFileUriPrefix-prefixed local file
+ *        reference (see isFileUri()), read and return that file's first
+ *        line (trailing newline stripped); otherwise return @p value
+ *        unchanged.
+ *
+ * Unlike opcUaClientCert/opcUaServerCert - where connectOpcUaClient() just
+ * hands the bare path to SecurityCredentials::certificateFile and
+ * open62541 itself reads it at connect time - a password has to already
+ * be a plain std::string by the time it reaches Client's constructor, so
+ * this reads the file eagerly here instead.
+ *
+ * @throws ConnectionException if isFileUri(value) and the referenced file
+ *         cannot be opened.
+ */
+inline std::string resolveFileUriValue(const std::string& value)
+{
+    if (!isFileUri(value)) {
+        return value;
+    }
+    const std::string path = stripFileUriPrefix(value);
+    std::ifstream in(path);
+    if (!in) {
+        throw ConnectionException("Failed to open file reference '" + value + "'", UA_STATUSCODE_BADIDENTITYTOKENINVALID);
+    }
+    std::string content;
+    std::getline(in, content);
+    return content;
 }
 
 /**
@@ -1800,12 +1855,29 @@ inline std::string getOwnBinaryDirectory()
  *          - user + password:                   username/password
  *                                                identity, still no
  *                                                SecureChannel security.
+ *                                                opcUaPassword may itself
+ *                                                be a kFileUriPrefix local
+ *                                                file reference instead of
+ *                                                carrying the password
+ *                                                inline (see
+ *                                                resolveFileUriValue()) -
+ *                                                useful for keeping a real
+ *                                                password out of the
+ *                                                instance file, which
+ *                                                yocto-fesa3 release
+ *                                                copies onto a commonly
+ *                                                NFS-shared tree.
  *          - opcUaClientCert + opcUaServerCert:  SecureChannel security
  *                                                (SignAndEncrypt), client/
  *                                                trusted server certificate
  *                                                taken from those two
- *                                                fields (Base64), private
- *                                                key from the fixed file
+ *                                                fields - either inline
+ *                                                Base64, or a local file
+ *                                                reference via
+ *                                                kFileUriPrefix (see
+ *                                                isFileUri()) - private
+ *                                                key always from the
+ *                                                fixed local file
  *                                                described on
  *                                                kOpcUaClientKeyFileName -
  *                                                combined with username/
@@ -1815,15 +1887,25 @@ inline std::string getOwnBinaryDirectory()
  *                                                and user identity are
  *                                                independent OPC UA
  *                                                concepts, see
- *                                                SecurityCredentials above).
+ *                                                SecurityCredentials above;
+ *                                                whether a given OPC UA
+ *                                                server still requires a
+ *                                                username/password identity
+ *                                                token over an
+ *                                                already-encrypted channel
+ *                                                is a server-side access-
+ *                                                control setting, not
+ *                                                something the client side
+ *                                                decides).
  *
  * This is a convention-based convenience wrapper, not a required entry
  * point: it assumes a FESA device exposes exactly those four fields by
- * those names, with opcUaClientCert/opcUaServerCert as Base64-encoded DER
- * text (see SecurityCredentials' `*Base64` fields above) and the matching
- * private key provisioned as described on kOpcUaClientKeyFileName. A
- * project with different device field names, or that doesn't want this
- * particular certs-as-instance-data + key-as-file split, can keep calling
+ * those names, with opcUaClientCert/opcUaServerCert as either Base64-
+ * encoded DER text (see SecurityCredentials' `*Base64` fields above) or a
+ * kFileUriPrefix-prefixed local file reference, and the matching private
+ * key provisioned as described on kOpcUaClientKeyFileName. A project with
+ * different device field names, or that doesn't want this particular
+ * certs-as-instance-data + key-as-file split, can keep calling
  * ClientRegistry::getOrCreate() directly instead.
  *
  * @tparam DeviceT  FESA generated device type; only requires
@@ -1832,30 +1914,32 @@ inline std::string getOwnBinaryDirectory()
  *                  itself requires.
  * @throws std::runtime_error if exactly one of opcUaClientCert/
  *         opcUaServerCert is set without the other.
- * @throws ConnectionException if both are set but this build has no
- *         OPC UA encryption support (UA_ENABLE_ENCRYPTION), or (at connect
- *         time) if the private key file described on kOpcUaClientKeyFileName
- *         is missing next to the running binary.
+ * @throws ConnectionException if opcUaPassword is a kFileUriPrefix
+ *         reference to a file that cannot be opened; if opcUaClientCert/
+ *         opcUaServerCert are both set but this build has no OPC UA
+ *         encryption support (UA_ENABLE_ENCRYPTION); or (at connect time)
+ *         if the private key file described on kOpcUaClientKeyFileName,
+ *         or a kFileUriPrefix-referenced certificate, is missing.
  */
 template <typename DeviceT>
 std::shared_ptr<Client> connectOpcUaClient(DeviceT* device)
 {
     const std::string endpoint = makeOpcUaEndpoint(device);
     const std::string username(device->opcUaUser.get());
-    const std::string password(device->opcUaPassword.get());
-    const std::string clientCertBase64(device->opcUaClientCert.get());
-    const std::string serverCertBase64(device->opcUaServerCert.get());
+    const std::string password = resolveFileUriValue(device->opcUaPassword.get());
+    const std::string clientCert(device->opcUaClientCert.get());
+    const std::string serverCert(device->opcUaServerCert.get());
 
     auto& registry = ClientRegistry::getInstance();
 
-    if (clientCertBase64.empty() && serverCertBase64.empty()) {
+    if (clientCert.empty() && serverCert.empty()) {
         if (username.empty()) {
             return registry.getOrCreate(endpoint);
         }
         return registry.getOrCreate(endpoint, username, password);
     }
 
-    if (clientCertBase64.empty() || serverCertBase64.empty()) {
+    if (clientCert.empty() || serverCert.empty()) {
         throw std::runtime_error(
             "Device " + device->getName()
             + " configures only one of opcUaClientCert/opcUaServerCert - both are required together");
@@ -1863,9 +1947,17 @@ std::shared_ptr<Client> connectOpcUaClient(DeviceT* device)
 
 #ifdef UA_ENABLE_ENCRYPTION
     SecurityCredentials security;
-    security.certificateBase64 = clientCertBase64;
-    security.privateKeyFile = getOwnBinaryDirectory() + "/" + kOpcUaClientKeyFileName;
-    security.trustedServerCertificateBase64 = serverCertBase64;
+    if (isFileUri(clientCert)) {
+        security.certificateFile = stripFileUriPrefix(clientCert);
+    } else {
+        security.certificateBase64 = clientCert;
+    }
+    security.privateKeyFile = std::string(kOpcUaSecurityMaterialDir) + "/" + kOpcUaClientKeyFileName;
+    if (isFileUri(serverCert)) {
+        security.trustedServerCertificateFile = stripFileUriPrefix(serverCert);
+    } else {
+        security.trustedServerCertificateBase64 = serverCert;
+    }
     security.applicationUri = kOpcUaApplicationUri;
 
     if (username.empty()) {

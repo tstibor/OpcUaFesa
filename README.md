@@ -154,6 +154,8 @@ A failed authentication (unknown user or wrong password) throws `OpcUa::Connecti
 
 > **Security note:** if the target endpoint only offers `SecurityPolicy#None` (no transport encryption - as the bundled mock server does), the username/password is sent in plaintext. `OpcUa::Client` opts into this automatically (`allowNonePolicyPassword`) so authentication works at all against such endpoints; production servers carrying real secrets should instead enable an encrypted `SecurityPolicy` on the endpoint - see the next section. Some servers (confirmed against a real Siemens S7-1500) require the login itself to be encrypted even while the channel stays `SecurityPolicy#None` - `OpcUa::Client` handles this automatically too (see `registerAuthSecurityPolicies()` in `OpcUaClient.hpp` for the mechanism), no extra caller-side setup needed.
 
+> **Keeping the password out of FESA instance data:** `OpcUa::connectOpcUaClient()` (section 2 above) accepts a `file:`-prefixed local file reference on `opcUaPassword` too, e.g. `file:/etc/opcua/passwd` - the same `kFileUriPrefix` mechanism as `opcUaClientCert`/`opcUaServerCert` (section 5). `connectOpcUaClient()` reads that file's first line as the actual password at connect time (see `OpcUa::resolveFileUriValue()`); the instance data itself only ever holds a path, not the secret. `Client`'s own constructor and `ClientRegistry::getOrCreate()` are unaffected - they still take a plain password string, same as the examples above.
+
 ### 5. SecureChannel Signing/Encryption
 
 Requires `open62541` built with encryption support (see Requirements above). Pass an `OpcUa::SecurityCredentials` to connect over `SecurityPolicy#Basic256Sha256` instead of `SecurityPolicy#None` - combine freely with either anonymous or username/password identity, and with `OpcUa::ClientRegistry::getOrCreate()`:
@@ -182,7 +184,7 @@ bool secured = client.usesSecurity(); // true
 
 Use `scripts/sslcert-create.sh` (run from within `scripts/`) to generate a matching self-signed client/server certificate pair for testing - it writes `certs/client_cert.der`, `certs/client_key.pem`, `certs/server_cert.der`, `certs/server_key.pem`. `applicationUri` must exactly match the `URI:` SubjectAlternativeName entry baked into the client certificate; a mismatch throws `OpcUa::ConnectionException` immediately at construction rather than failing later during `connect()`. The trusted server certificate is certificate *pinning* (this client trusts exactly that one server certificate), not CA-chain validation.
 
-`OpcUa::connectOpcUaClient()` (section 2 above) wires this up automatically too, when a device's `opcUaClientCert`/`opcUaServerCert` fields (Base64-encoded DER, since FESA instance-file XML can't embed raw binary) are both set - see `kOpcUaClientKeyFileName`/`kOpcUaApplicationUri` in `OpcUaClient.hpp` for the private-key-file and ApplicationUri conventions it expects.
+`OpcUa::connectOpcUaClient()` (section 2 above) wires this up automatically too, when a device's `opcUaClientCert`/`opcUaServerCert` fields are both set - either as Base64-encoded DER text directly, or as a `file:`-prefixed local file reference (e.g. `file:/etc/opcua/client_cert.der`, see `OpcUa::isFileUri()`), useful for keeping large certificate blobs out of the instance file entirely. The private key is never FESA instance data either way - see `kOpcUaSecurityMaterialDir`/`kOpcUaClientKeyFileName`/`kOpcUaApplicationUri` in `OpcUaClient.hpp` for where it (and, optionally, `file:`-referenced certificates) are expected: a fixed local directory (`/etc/opcua` by default) on the target's own filesystem, provisioned independently of `yocto-fesa3 release` - deliberately *not* derived from the running binary's own location, since a deploy unit's release tree is commonly NFS-shared (and often read-only), which is fine for public certificate data but not for a private key.
 
 #### Certificates as Base64 text or raw bytes, not just files
 
@@ -348,7 +350,7 @@ Requires the yocto SDK environment already sourced (`SDKTARGETSYSROOT` set) when
 
 ## Test Coverage
 
-`tests/test_opcua_client.cpp` (67 tests across 9 suites):
+`tests/test_opcua_client.cpp` (73 tests across 10 suites):
 
 | Test suite | Covers |
 |---|---|
@@ -356,6 +358,7 @@ Requires the yocto SDK environment already sourced (`SDKTARGETSYSROOT` set) when
 | `OpcUaClientBatchTest` | `readBatch<T>()`/`writeBatch<T>()` and the NodeId-based `readByNodeIdBatch<T>()`/`writeByNodeIdBatch<T>()`: successful multi-node round trips, empty input (no service call made), a missing node or type mismatch discarding the whole batch, the dotted-tag NodeId variant, and disconnected-state errors. |
 | `OpcUaClientQuoteTest` | `OpcUa::Client::quoteTagPath()` as a pure function - single-segment tags, dot-separated tag paths, already-quoted passthrough, and consecutive-dot edge cases. No server required. |
 | `MakeOpcUaEndpointTest` | `OpcUa::makeOpcUaEndpoint()` endpoint URL formatting, including via a pointer-like handle (e.g. `std::shared_ptr`). No server required. |
+| `FileUriTest` | `OpcUa::isFileUri()`/`stripFileUriPrefix()`/`resolveFileUriValue()` as pure functions - detecting the `file:` prefix `connectOpcUaClient()` accepts on `opcUaClientCert`/`opcUaServerCert`/`opcUaPassword` as an alternative to an inline value, stripping it to a bare path, and (for `opcUaPassword`) reading the referenced file's content. No server required. |
 | `UpdateDeviceTest` | `OpcUa::applyLinkHealthToDevice()`'s three status branches (disconnected/ERROR, connected-but-node-access-failing/WARNING, healthy/OK) against a lightweight mock FESA device. No server required. |
 | `OpcUaClientAuthTest` | Username/password authentication: valid credentials, wrong password, unknown user, credential reuse across reconnects, and via `OpcUa::ClientRegistry`. |
 | `OpcUaClientSecurityTest` | SecureChannel signing/encryption (`OpcUa::SecurityCredentials`/`SecurityMode`) combined with anonymous and username/password identity, reconnect behaviour, each material's `*File`/`*Base64`/`*Bytes` source resolved independently, misconfiguration errors (mismatched `applicationUri`, missing cert file, zero/ambiguous source, malformed Base64), and via `OpcUa::ClientRegistry`. Compiled only when `open62541` has encryption support - see Requirements above. |

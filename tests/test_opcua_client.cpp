@@ -57,6 +57,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <sstream>
 #include <thread>
@@ -211,6 +212,43 @@ TEST(MakeOpcUaEndpointTest, WorksWithAnyPointerLikeHandleNotJustRawPointers) {
     device->opcUaServerPort.value = 4841;
 
     EXPECT_EQ(makeOpcUaEndpoint(device), "opc.tcp://127.0.0.1:4841");
+}
+
+// --- isFileUri()/stripFileUriPrefix() Coverage ---
+
+TEST(FileUriTest, DetectsFileUriPrefix) {
+    EXPECT_TRUE(isFileUri("file:/etc/opcua/client_cert.der"));
+    EXPECT_TRUE(isFileUri("file:"));  // prefix alone, empty path - still detected as a file URI
+}
+
+TEST(FileUriTest, RejectsInlineBase64Data) {
+    EXPECT_FALSE(isFileUri(""));
+    EXPECT_FALSE(isFileUri("MIIB..."));
+    EXPECT_FALSE(isFileUri("not-a-file-uri"));
+}
+
+TEST(FileUriTest, StripsFileUriPrefixLeavingBarePath) {
+    EXPECT_EQ(stripFileUriPrefix("file:/etc/opcua/client_cert.der"), "/etc/opcua/client_cert.der");
+    EXPECT_EQ(stripFileUriPrefix("file:"), "");
+}
+
+TEST(FileUriTest, ResolveFileUriValuePassesThroughNonFileUriUnchanged) {
+    EXPECT_EQ(resolveFileUriValue(""), "");
+    EXPECT_EQ(resolveFileUriValue("plaintext-password"), "plaintext-password");
+}
+
+TEST(FileUriTest, ResolveFileUriValueReadsFirstLineOfReferencedFile) {
+    const std::string path = "/tmp/opcua_fesa_test_resolve_file_uri_value.txt";
+    {
+        std::ofstream out(path);
+        out << "Quelle1234\n";
+    }
+    EXPECT_EQ(resolveFileUriValue("file:" + path), "Quelle1234");
+    std::remove(path.c_str());
+}
+
+TEST(FileUriTest, ResolveFileUriValueThrowsOnMissingFile) {
+    EXPECT_THROW(resolveFileUriValue("file:/no/such/path/opcua_fesa_test_missing.txt"), ConnectionException);
 }
 
 // --- applyLinkHealthToDevice() Coverage ---
