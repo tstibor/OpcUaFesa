@@ -69,7 +69,7 @@ namespace OpcUa {
  * hand to match the git tag whenever a release is tagged - e.g. after
  * `git tag 1.1.0`, update the string below to "1.1.0" in the same commit.
  */
-constexpr const char* version() noexcept { return "0.1.0"; }
+constexpr const char* version() noexcept { return "0.1.1"; }
 
 /**
  * @brief Version string of the open62541 library this header is compiled

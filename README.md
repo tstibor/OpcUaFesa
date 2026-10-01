@@ -1,6 +1,6 @@
 # OpcUaFesa
 
-**Version:** 0.1.0 (matches `OpcUa::version()` in `include/OpcUa/OpcUaClient.hpp`; kept in sync with each `git tag` release)
+**Version:** 0.1.1 (matches `OpcUa::version()` in `include/OpcUa/OpcUaClient.hpp`; kept in sync with each `git tag` release)
 
 A lightweight, modern C++17 header-only OPC UA client library for **FESA** (Front-End Software Architecture) equipment classes, built on top of the open-source [`open62541`](https://open62541.org/) stack.
 
