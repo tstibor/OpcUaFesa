@@ -50,6 +50,7 @@ matching what OpcUaClient::quote() produces for a plain, dot-free tag):
     "A_OUT_0"                                            Int16    -15000    "A_OUT_0"
     "A_OUT_1"                                            Int16    -15001    "A_OUT_1"
     "A_OUT_2"                                            Int16    -15002    "A_OUT_2"
+    "TestUInt16"                                         UInt16   50000     "TestUInt16"
     "TestInt32"                                         Int32    123456789 "TestInt32"
     "PID_Setpoint"                                       Float    45.5      "PID_Setpoint"
     "HMIinterface"."02-NG02"."TFT_Anzeige_NG2Ist1U"     Int32    777       "HMIinterface.02-NG02.TFT_Anzeige_NG2Ist1U"
@@ -176,6 +177,12 @@ async def register_variables(server: Server) -> None:
 
     node_int16_2 = await objects.add_variable(ua.NodeId('"A_OUT_2"', idx), "A_OUT_2", -15002, varianttype=ua.VariantType.Int16)
     await node_int16_2.set_writable()
+
+    # Initial value (50000) is deliberately > INT16_MAX (32767), so a test
+    # reading/writing it genuinely exercises the unsigned range rather than
+    # coincidentally working with a value that would also fit in Int16.
+    node_uint16 = await objects.add_variable(ua.NodeId('"TestUInt16"', idx), "TestUInt16", 50000, varianttype=ua.VariantType.UInt16)
+    await node_uint16.set_writable()
 
     node_int32 = await objects.add_variable(ua.NodeId('"TestInt32"', idx), "TestInt32", 123456789, varianttype=ua.VariantType.Int32)
     await node_int32.set_writable()

@@ -1488,6 +1488,9 @@ inline const UA_DataType& Client::uaType<UA_Byte>() { return UA_TYPES[UA_TYPES_B
 /** @brief uaType<T>() specialization mapping UA_Int16 to UA_TYPES_INT16. */
 template <>
 inline const UA_DataType& Client::uaType<UA_Int16>() { return UA_TYPES[UA_TYPES_INT16]; }
+/** @brief uaType<T>() specialization mapping UA_UInt16 to UA_TYPES_UINT16. */
+template <>
+inline const UA_DataType& Client::uaType<UA_UInt16>() { return UA_TYPES[UA_TYPES_UINT16]; }
 /** @brief uaType<T>() specialization mapping UA_Int32 to UA_TYPES_INT32. */
 template <>
 inline const UA_DataType& Client::uaType<UA_Int32>() { return UA_TYPES[UA_TYPES_INT32]; }

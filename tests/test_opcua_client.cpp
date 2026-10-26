@@ -32,7 +32,7 @@
  *                                        release/releaseAll.
  *
  * write<T>() is round-tripped through write+read for every supported type
- * (UA_Boolean/UA_Byte/UA_Int16/UA_Int32/UA_Float) across
+ * (UA_Boolean/UA_Byte/UA_Int16/UA_UInt16/UA_Int32/UA_Float) across
  * OpcUaClientTest.WriteSupportedTypes and .WriteRemainingSupportedTypes.
  * OpcUaClientTest.ConcurrentReadWriteFromMultipleThreadsIsThreadSafe covers
  * concurrent access to a single Client from multiple threads, as the
@@ -316,9 +316,9 @@ TEST(UpdateDeviceTest, FullyHealthySetsOkStatus) {
 
 /**
  * @brief Fixture for anonymous connect/disconnect and read<T>()/write<T>()
- *        coverage against the mock server's eight pre-registered nodes
- *        (TestBool, TestByte, A_OUT_0, A_OUT_1, A_OUT_2, TestInt32,
- *        PID_Setpoint, and the dot-separated
+ *        coverage against the mock server's nine pre-registered nodes
+ *        (TestBool, TestByte, A_OUT_0, A_OUT_1, A_OUT_2, TestUInt16,
+ *        TestInt32, PID_Setpoint, and the dot-separated
  *        "HMIinterface.02-NG02.TFT_Anzeige_NG2Ist1U" tag). A_OUT_1/A_OUT_2
  *        exist alongside A_OUT_0 purely for OpcUaClientBatchTest below, which
  *        needs several same-typed nodes to actually batch together.
@@ -333,6 +333,7 @@ protected:
         bootstrapClient.write<UA_Int16>("A_OUT_0", -15000);
         bootstrapClient.write<UA_Int16>("A_OUT_1", -15001);
         bootstrapClient.write<UA_Int16>("A_OUT_2", -15002);
+        bootstrapClient.write<UA_UInt16>("TestUInt16", 50000);
         bootstrapClient.write<UA_Int32>("TestInt32", 123456789);
         bootstrapClient.write<UA_Float>("PID_Setpoint", 45.5f);
         bootstrapClient.write<UA_Int32>("HMIinterface.02-NG02.TFT_Anzeige_NG2Ist1U", 777);
@@ -423,6 +424,9 @@ TEST_F(OpcUaClientTest, ReadSupportedTypes) {
     auto int16Val = client->read<UA_Int16>("A_OUT_0");
     EXPECT_EQ(int16Val, -15000);
 
+    auto uint16Val = client->read<UA_UInt16>("TestUInt16");
+    EXPECT_EQ(uint16Val, 50000);
+
     auto int32Val = client->read<UA_Int32>("TestInt32");
     EXPECT_EQ(int32Val, 123456789);
 
@@ -451,13 +455,14 @@ TEST_F(OpcUaClientTest, WriteSupportedTypes) {
     ASSERT_FLOAT_EQ(client->read<UA_Float>("PID_Setpoint"), originalFloat);
 }
 
-// Covers the three supported write<T>() types WriteSupportedTypes above
-// doesn't: UA_Boolean, UA_Byte, UA_Int32.
+// Covers the four supported write<T>() types WriteSupportedTypes above
+// doesn't: UA_Boolean, UA_Byte, UA_UInt16, UA_Int32.
 TEST_F(OpcUaClientTest, WriteRemainingSupportedTypes) {
     client->connect();
 
     constexpr UA_Boolean originalBool = true;
     constexpr UA_Byte originalByte = 255;
+    constexpr UA_UInt16 originalUInt16 = 50000;
     constexpr UA_Int32 originalInt32 = 123456789;
 
     client->write<UA_Boolean>("TestBool", false);
@@ -466,15 +471,22 @@ TEST_F(OpcUaClientTest, WriteRemainingSupportedTypes) {
     client->write<UA_Byte>("TestByte", 128);
     EXPECT_EQ(client->read<UA_Byte>("TestByte"), 128);
 
+    // 60000 is > INT16_MAX (32767) - genuinely exercises the unsigned range,
+    // not just a value that would happen to also fit in Int16.
+    client->write<UA_UInt16>("TestUInt16", 60000);
+    EXPECT_EQ(client->read<UA_UInt16>("TestUInt16"), 60000);
+
     client->write<UA_Int32>("TestInt32", -999999);
     EXPECT_EQ(client->read<UA_Int32>("TestInt32"), -999999);
 
     client->write<UA_Boolean>("TestBool", originalBool);
     client->write<UA_Byte>("TestByte", originalByte);
+    client->write<UA_UInt16>("TestUInt16", originalUInt16);
     client->write<UA_Int32>("TestInt32", originalInt32);
 
     ASSERT_EQ(client->read<UA_Boolean>("TestBool"), originalBool);
     ASSERT_EQ(client->read<UA_Byte>("TestByte"), originalByte);
+    ASSERT_EQ(client->read<UA_UInt16>("TestUInt16"), originalUInt16);
     ASSERT_EQ(client->read<UA_Int32>("TestInt32"), originalInt32);
 }
 

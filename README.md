@@ -354,7 +354,7 @@ Requires the yocto SDK environment already sourced (`SDKTARGETSYSROOT` set) when
 
 | Test suite | Covers |
 |---|---|
-| `OpcUaClientTest` | Anonymous connect/disconnect/reconnect lifecycle, `isConnected()`, destructor safety, `read<T>()`/`write<T>()` for all five supported types (round-tripped through write+read), the dot-separated tag path `"HMIinterface.02-NG02.TFT_Anzeige_NG2Ist1U"` end-to-end via `quoteTagPath()`, type-mismatch/missing-node errors, and concurrent read/write/`isConnected()` access to a single shared client from multiple threads. |
+| `OpcUaClientTest` | Anonymous connect/disconnect/reconnect lifecycle, `isConnected()`, destructor safety, `read<T>()`/`write<T>()` for all six supported types (round-tripped through write+read), the dot-separated tag path `"HMIinterface.02-NG02.TFT_Anzeige_NG2Ist1U"` end-to-end via `quoteTagPath()`, type-mismatch/missing-node errors, and concurrent read/write/`isConnected()` access to a single shared client from multiple threads. |
 | `OpcUaClientBatchTest` | `readBatch<T>()`/`writeBatch<T>()` and the NodeId-based `readByNodeIdBatch<T>()`/`writeByNodeIdBatch<T>()`: successful multi-node round trips, empty input (no service call made), a missing node or type mismatch discarding the whole batch, the dotted-tag NodeId variant, and disconnected-state errors. |
 | `OpcUaClientQuoteTest` | `OpcUa::Client::quoteTagPath()` as a pure function - single-segment tags, dot-separated tag paths, already-quoted passthrough, and consecutive-dot edge cases. No server required. |
 | `MakeOpcUaEndpointTest` | `OpcUa::makeOpcUaEndpoint()` endpoint URL formatting, including via a pointer-like handle (e.g. `std::shared_ptr`). No server required. |
